@@ -1,4 +1,6 @@
-# This installation method is for advanced users only
+# HomeAssistant Supervised Installer
+
+> This installation method is for advanced users only
 
 ## Make sure you understand [the requirements](https://github.com/home-assistant/architecture/blob/master/adr/0014-home-assistant-supervised.md)
 
@@ -14,34 +16,48 @@ This method is considered advanced and should only be used if one is an expert i
 
 Run the following commands as root (`su -` or `sudo su -` on machines with sudo installed):
 
-Step 1: Install the following dependacy's with this command:
+### Install dependencies
+
+#### Debian 
 
 ```bash
-apt-get install \
-jq \
-wget \
-curl \
-udisks2 \
-libglib2.0-bin \
-network-manager \
-dbus -y
-```
-
-Step 2: Install Docker-CE with the following command:
-
-```bash
+apt -i install \
+  jq \
+  wget \
+  curl \
+  udisks2 \
+  libglib2.0-bin \
+  network-manager \
+  dbus
 curl -fsSL get.docker.com | sh
 ```
 
-Step 3: Install the OS-Agent:
-
-Instructions for installing the OS-Agent can be found [here](https://github.com/home-assistant/os-agent/tree/main#using-home-assistant-supervised-on-debian)
-
-Step 4: Install the Home Assisistant Supervised Debian Package:
+#### Arch
 
 ```bash
-wget https://github.com/home-assistant/supervised-installer/releases/latest/download/homeassistant-supervised.deb
-dpkg -i homeassistant-supervised.deb
+pacman -S apparmor jq udisks2 networkmanager
+pacman -S docker
+systemctl enable docker
+systemctl start docker
+systemctl enable NetworkManager
+systemctl start NetworkManager
+systemctl stop systemd-networkd
+systemctl disable systemd-networkd
+```
+
+### Install supervised
+
+```bash
+./install.sh
+```
+
+### Uninstall supervised
+
+> Disclaimer: Some resources might be left in the system.
+>             Check the `install.sh` for all details.
+
+```bash
+./uninstall.sh
 ```
 
 ## Supported Machine types

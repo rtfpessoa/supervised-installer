@@ -6,12 +6,6 @@ function info { echo -e "\e[32m[info] $*\e[39m"; }
 function warn  { echo -e "\e[33m[warn] $*\e[39m"; }
 function error { echo -e "\e[31m[error] $*\e[39m"; exit 1; }
 
-warn ""
-warn "If you want more control over your own system, run"
-warn "Home Assistant as a VM or run Home Assistant Core"
-warn "via a Docker container."
-warn ""
-
 # Check if Modem Manager is enabled
 if systemctl is-enabled ModemManager.service &> /dev/null; then
     warn "ModemManager service is enabled. This might cause issue when using serial devices."
@@ -24,9 +18,15 @@ if [[ "$(sysctl --values kernel.dmesg_restrict)" != "0" ]]; then
     echo "kernel.dmesg_restrict=0" >> /etc/sysctl.conf
 fi
 
+systemctl enable apparmor.service
+systemctl start apparmor.service
+
+mkdir -p /etc/dbus-1/system.d
+cp -f ./etc/dbus-1/system.d/io.hass.conf /etc/dbus-1/system.d/io.hass.conf
 cp -f ./etc/docker/daemon.json /etc/docker/daemon.json
 cp -f ./etc/NetworkManager/system-connections/default /etc/NetworkManager/system-connections/default
 cp -f ./etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/NetworkManager.conf
+cp -f ./etc/systemd/system/haos-agent.service /etc/systemd/system/haos-agent.service
 cp -f ./etc/systemd/system/hassio-apparmor.service /etc/systemd/system/hassio-apparmor.service
 cp -f ./etc/systemd/system/hassio-supervisor.service /etc/systemd/system/hassio-supervisor.service
 mkdir -p /etc/network
@@ -49,7 +49,7 @@ SERVICE_NM="NetworkManager.service"
 
 # Read infos from web
 URL_VERSION_HOST="version.home-assistant.io"
-URL_VERSION="https://version.home-assistant.io/stable.json"
+URL_VERSION="https://${URL_VERSION_HOST}/stable.json"
 HASSIO_VERSION=$(curl -s ${URL_VERSION} | jq -e -r '.supervisor')
 URL_APPARMOR_PROFILE="https://version.home-assistant.io/apparmor.txt"
 
@@ -78,45 +78,46 @@ done
 PRIMARY_INTERFACE=$(ip route | awk '/^default/ { print $5 }')
 IP_ADDRESS=$(ip -4 addr show dev "${PRIMARY_INTERFACE}" | awk '/inet / { sub("/.*", "", $2); print $2 }')
 
+OS_AGENT_VERSION="$(curl -s https://api.github.com/repos/home-assistant/os-agent/releases/latest | jq -r .name)"
+
 case ${ARCH} in
     "i386" | "i686")
         MACHINE=${MACHINE:=qemux86}
         HASSIO_DOCKER="${DOCKER_REPO}/i386-hassio-supervisor"
+        OSAGENT_URL="https://github.com/home-assistant/os-agent/releases/download/${OS_AGENT_VERSION}/os-agent_${OS_AGENT_VERSION}_linux_i386.deb"
     ;;
     "x86_64")
         MACHINE=${MACHINE:=qemux86-64}
         HASSIO_DOCKER="${DOCKER_REPO}/amd64-hassio-supervisor"
+        OSAGENT_URL="https://github.com/home-assistant/os-agent/releases/download/${OS_AGENT_VERSION}/os-agent_${OS_AGENT_VERSION}_linux_x86_64.deb"
     ;;
     "arm" |"armv6l")
-        if [ -z "${MACHINE}" ]; then
-             db_input critical ha/machine-type || true
-             db_go || true
-             db_get ha/machine-type || true
-             MACHINE="${RET}"
-             db_stop
-        fi
+        select mach in generic-x86-64 odroid-c2 odroid-n2 odroid-xu qemuarm qemuarm-64 qemux86 qemux86-64 raspberrypi raspberrypi2 raspberrypi3 raspberrypi4 raspberrypi3-64 raspberrypi4-64 tinker khadas-vim3
+        do
+            MACHINE="${mach}"
+            break
+        done
         HASSIO_DOCKER="${DOCKER_REPO}/armhf-hassio-supervisor"
+        OSAGENT_URL="https://github.com/home-assistant/os-agent/releases/download/${OS_AGENT_VERSION}/os-agent_${OS_AGENT_VERSION}_linux_armv5.deb"
     ;;
     "armv7l")
-        if [ -z "${MACHINE}" ]; then
-             db_input critical ha/machine-type || true
-             db_go || true
-             db_get ha/machine-type || true
-             MACHINE="${RET}"
-             db_stop
-        fi
+        select mach in generic-x86-64 odroid-c2 odroid-n2 odroid-xu qemuarm qemuarm-64 qemux86 qemux86-64 raspberrypi raspberrypi2 raspberrypi3 raspberrypi4 raspberrypi3-64 raspberrypi4-64 tinker khadas-vim3
+        do
+            MACHINE="${mach}"
+            break
+        done
         HASSIO_DOCKER="${DOCKER_REPO}/armv7-hassio-supervisor"
+        OSAGENT_URL="https://github.com/home-assistant/os-agent/releases/download/${OS_AGENT_VERSION}/os-agent_${OS_AGENT_VERSION}_linux_armv7.deb"
     ;;
     "aarch64")
-        if [ -z "${MACHINE}" ]; then
-             db_input critical ha/machine-type || true
-             db_go || true
-             db_get ha/machine-type || true
-             MACHINE="${RET}"
-             db_stop
-
-        fi
+        select mach in generic-x86-64 odroid-c2 odroid-n2 odroid-xu qemuarm qemuarm-64 qemux86 qemux86-64 raspberrypi raspberrypi2 raspberrypi3 raspberrypi4 raspberrypi3-64 raspberrypi4-64 tinker khadas-vim3
+        do
+            MACHINE="${mach}"
+            break
+        done
+        MACHINE="raspberrypi4-64"
         HASSIO_DOCKER="${DOCKER_REPO}/aarch64-hassio-supervisor"
+        OSAGENT_URL="https://github.com/home-assistant/os-agent/releases/download/${OS_AGENT_VERSION}/os-agent_${OS_AGENT_VERSION}_linux_aarch64.deb"
     ;;
     *)
         error "${ARCH} unknown!"
@@ -134,6 +135,21 @@ cat > "${CONFIG}" <<- EOF
     "data": "${DATA_SHARE}"
 }
 EOF
+
+systemctl daemon-reload
+
+# Install os-agent
+WORKDIR=$(mktemp -d -t hass-workdir.XXXXXXXXXX)
+cd ${WORKDIR}
+curl -fsSL "${OSAGENT_URL}" -o osagent.deb
+ar x osagent.deb
+tar -xvf data.tar.gz
+cp -f ./usr/bin/os-agent /usr/bin/os-agent
+cd -
+rm -rf ${WORKDIR}
+chmod a+x "/usr/bin/os-agent"
+systemctl enable haos-agent.service > /dev/null 2>&1;
+systemctl start haos-agent.service
 
 # Pull Supervisor image
 info "Install supervisor Docker container"
@@ -171,19 +187,6 @@ systemctl start hassio-supervisor.service
 info "Installing the 'ha' cli"
 chmod a+x "${PREFIX}/bin/ha"
 
-# Switch to cgroup v1
-if ! grep -q "systemd.unified_cgroup_hierarchy=false" /etc/default/grub; then
-    info "Switching to cgroup v1"
-    cp /etc/default/grub /etc/default/grub.bak
-    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="/&systemd.unified_cgroup_hierarchy=false /' /etc/default/grub
-    update-grub
-    touch /var/run/reboot-required
-fi
-
 info "Within a few minutes you will be able to reach Home Assistant at:"
 info "http://homeassistant.local:8123 or using the IP address of your"
 info "machine: http://${IP_ADDRESS}:8123"
-if [ -f /var/run/reboot-required ]
-then
-    warn "A reboot is required to apply changes to grub."
-fi
