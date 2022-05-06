@@ -1,9 +1,43 @@
 #!/usr/bin/env bash
+
 set -e
+
 function info { echo -e "\e[32m[info] $*\e[39m"; }
 function warn  { echo -e "\e[33m[warn] $*\e[39m"; }
 function error { echo -e "\e[31m[error] $*\e[39m"; exit 1; }
-. /usr/share/debconf/confmodule
+
+warn ""
+warn "If you want more control over your own system, run"
+warn "Home Assistant as a VM or run Home Assistant Core"
+warn "via a Docker container."
+warn ""
+
+# Check if Modem Manager is enabled
+if systemctl is-enabled ModemManager.service &> /dev/null; then
+    warn "ModemManager service is enabled. This might cause issue when using serial devices."
+fi
+
+# Check dmesg access
+if [[ "$(sysctl --values kernel.dmesg_restrict)" != "0" ]]; then
+    info "Fix kernel dmesg restriction"
+    echo 0 > /proc/sys/kernel/dmesg_restrict
+    echo "kernel.dmesg_restrict=0" >> /etc/sysctl.conf
+fi
+
+cp -f ./etc/docker/daemon.json /etc/docker/daemon.json
+cp -f ./etc/NetworkManager/system-connections/default /etc/NetworkManager/system-connections/default
+cp -f ./etc/NetworkManager/NetworkManager.conf /etc/NetworkManager/NetworkManager.conf
+cp -f ./etc/systemd/system/hassio-apparmor.service /etc/systemd/system/hassio-apparmor.service
+cp -f ./etc/systemd/system/hassio-supervisor.service /etc/systemd/system/hassio-supervisor.service
+mkdir -p /etc/network
+cp -f ./etc/network/interfaces /etc/network/interfaces
+
+cp -f ./usr/bin/ha /usr/bin/ha
+cp -f ./usr/sbin/hassio-apparmor /usr/sbin/hassio-apparmor
+cp -f ./usr/sbin/hassio-supervisor /usr/sbin/hassio-supervisor
+mkdir -p /usr/share/hassio/apparmor
+cp -f ./usr/share/hassio/apparmor/hassio-supervisor /usr/share/hassio/apparmor/hassio-supervisor
+
 ARCH=$(uname -m)
 
 BINARY_DOCKER=/usr/bin/docker
@@ -18,7 +52,6 @@ URL_VERSION_HOST="version.home-assistant.io"
 URL_VERSION="https://version.home-assistant.io/stable.json"
 HASSIO_VERSION=$(curl -s ${URL_VERSION} | jq -e -r '.supervisor')
 URL_APPARMOR_PROFILE="https://version.home-assistant.io/apparmor.txt"
-
 
 # Restart NetworkManager
 info "Restarting NetworkManager"
@@ -89,6 +122,7 @@ case ${ARCH} in
         error "${ARCH} unknown!"
     ;;
 esac
+
 PREFIX=${PREFIX:-/usr}
 SYSCONFDIR=${SYSCONFDIR:-/etc}
 DATA_SHARE=${DATA_SHARE:-$PREFIX/share/hassio}
